@@ -19,62 +19,52 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
 #include <usbmuxd.h>
 #include <thread>
 
-#include "logging.h"
+#include "logging.hpp"
 #include "Protocol.hpp"
 
 namespace portal
 {
-
-    class ChannelDelegate
+    struct ChannelDelegate
     {
-    public:
-        virtual void channelDidReceivePacket(std::vector<char> packet, int type, int tag) = 0;
-        virtual void channelDidStop() = 0;
+        virtual void channel_onPacketReceive(std::vector<char> packet, const int type, const int tag) = 0;
+        virtual void channel_onStop() = 0;
         virtual ~ChannelDelegate(){};
     };
 
-    class Channel : public SimpleDataPacketProtocolDelegate, public std::enable_shared_from_this<Channel>
+    class Channel final : public SimpleDataPacketProtocolDelegate, public std::enable_shared_from_this<Channel>
     {
     public:
-        Channel(int port, int sfd);
+        Channel(const int port, const int conn);
         ~Channel();
 
-        std::shared_ptr<Channel> getptr()
-        {
-            return shared_from_this();
-        }
+        std::shared_ptr<Channel> getptr() { return shared_from_this(); }
 
         void close();
 
-        void simpleDataPacketProtocolDelegateDidProcessPacket(std::vector<char> packet, int type, int tag);
+        void simpleDataPacketProtocolDelegate_onProcessPacket(const Packet packet, const int type, const int tag) override;
 
-        void setDelegate(std::shared_ptr<ChannelDelegate> newDelegate)
-        {
-            delegate = newDelegate;
-        }
-
-        int getPort() {
-            return port;
-        }
-
-        void configureProtocolDelegate() {
-            protocol->setDelegate(shared_from_this());
-        }
+        void setDelegate(std::shared_ptr<ChannelDelegate> delegate) { m_delegate = delegate; }
+        int getPort() const noexcept { return m_port; }
+        void configureProtocolDelegate() { m_protocol->setDelegate(shared_from_this()); }
 
     private:
-        int port;
-        int conn;
+        // Data members
 
-        void setPacketDelegate(std::shared_ptr<SimpleDataPacketProtocolDelegate> newDelegate)
+        int m_port{};
+        int m_conn{};
+
+        std::unique_ptr<SimpleDataPacketProtocol> m_protocol{nullptr};
+        std::weak_ptr<ChannelDelegate> m_delegate{};
+
+        bool m_running{false};
+        std::thread m_thread;
+
+        // Utility functions
+
+        void setPacketDelegate(std::shared_ptr<SimpleDataPacketProtocolDelegate> delegate)
         {
-            protocol->setDelegate(newDelegate);
+            m_protocol->setDelegate(delegate);
         }
-
-        std::unique_ptr<SimpleDataPacketProtocol> protocol;
-
-        std::weak_ptr<ChannelDelegate> delegate;
-
-        bool running = false;
 
         bool StartInternalThread();
         void WaitForInternalThreadToExit();
@@ -84,10 +74,7 @@ namespace portal
         static void *InternalThreadEntryFunc(void *This)
         {
             ((portal::Channel *)This)->InternalThreadEntry();
-            return NULL;
+            return nullptr;
         }
-
-        std::thread _thread;
     };
-}
-
+} // namespace portal

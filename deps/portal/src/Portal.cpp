@@ -17,99 +17,84 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
  */
 
 #include <iostream>
+#include <cstring>
 
 #include "Portal.hpp"
 
 namespace portal
 {
-    /**
-     usbmuxd callback
-     */
-    void pt_usbmuxd_cb(const usbmuxd_event_t *event, void *user_data)
+    Portal::Portal(PortalDelegate *delegate)
+        :
+        m_delegate{delegate},
+        m_listening{false}
     {
-        Portal *client = static_cast<Portal *>(user_data);
-
-        switch (event->event)
-        {
-            case UE_DEVICE_ADD:
-                client->addDevice(event->device);
-                break;
-            case UE_DEVICE_REMOVE:
-                client->removeDevice(event->device);
-                break;
-        }
-
-        if (client->delegate != NULL) {
-            client->delegate->portalDidUpdateDeviceList(client->_devices);
-        }
-    }
-
-    Portal::Portal(PortalDelegate *delegate) : _listening(false)
-    {
-        this->delegate = delegate;
-
 #if PORTAL_DEBUG_LOG_ENABLED
         libusbmuxd_set_debug_level(10);
 #endif
 
-        // Load the device list
         reloadDeviceList();
-
         startListeningForDevices();
     }
 
     void Portal::connectToDevice(Device::shared_ptr device)
     {
-        // Disconnect to previous device
-        if (_device) {
-            portal_log("%s: Disconnecting from old device \n", __func__);
-            _device->disconnect();
-            _device = nullptr;
+        if (m_device)
+        {
+            portal_log_stderr("%s: Disconnecting old device", __func__);
+
+            m_device->disconnect();
+            m_device = nullptr;
         }
 
-        _device = device;
+        m_device = device;
 
-        portal_log("PORTAL (%p): Connecting to device: %s (%s)\n", this, device->getProductId().c_str(), device->uuid().c_str());
+        const auto productId = m_device->getProductId().c_str();
+        const auto uuid = m_device->uuid().c_str();
+        portal_log_stderr("PORTAL (%p): Connecting to device: %s (%s)", this, productId, uuid);
 
         // Connect to the device with the channel delegate.
-        device->connect(1260, shared_from_this(), 2000);
+        m_device->connect(1260, shared_from_this(), 2000);
     }
 
     void Portal::removeDisconnectedDevices()
     {
-        // Find removed devices.
         std::list<Device::shared_ptr> devicesToRemove;
 
-        std::for_each(_devices.begin(), _devices.end(),
-                      [&](std::map<int, Device::shared_ptr>::value_type &deviceMap) {
-                          if (deviceMap.second->isConnected() == false) {
-                              devicesToRemove.push_back(deviceMap.second);
-                          }
-                      }
-                      );
+        // Get the list of disconnected devices
+        for (const auto& deviceMap : m_devices)
+        {
+            const auto& device = deviceMap.second;
+            if (!device->isConnected())
+            {
+                devicesToRemove.push_back(device);
+            }
+        }
 
         // Remove the unplugged devices.
-        std::for_each(devicesToRemove.begin(), devicesToRemove.end(), [this](Device::shared_ptr device) {
-            this->removeDevice(device->_device);
-        });
+        for (auto device : devicesToRemove)
+        {
+            removeDevice(device->m_device);
+        }
     }
 
     void Portal::addConnectedDevices()
     {
-        // Add the currently connected devices
-        int connectedDeviceCount = 0;
-        usbmuxd_device_info_t *devicelist = NULL;
-        connectedDeviceCount = usbmuxd_get_device_list(&devicelist);
+        usbmuxd_device_info_t *devicelist{nullptr};
+        const auto connectedDeviceCount = usbmuxd_get_device_list(&devicelist);
+        if (connectedDeviceCount < 0)
+        {
+            portal_log_stderr("Failed to get device list!");
+            return;
+        }
+        else if (connectedDeviceCount == 0)
+        {
+            portal_log_stderr("No devices attached!");
+            return;
+        }
 
-        if (connectedDeviceCount > 0) {
-
-            usbmuxd_device_info_t device_info;
-            memset(&device_info, 0, sizeof(usbmuxd_device_info_t));
-
-            for (int i = 0; i < connectedDeviceCount; i++) {
-                device_info = devicelist[i];
-                addDevice(device_info);
-            }
+        for (int i{0}; i < connectedDeviceCount; ++i)
+        {
+            addDevice(devicelist[i]);
         }
     }
 
@@ -122,32 +107,27 @@ namespace portal
     // BUG: Listening for devices only works when there is one instance of the plugin
     int Portal::startListeningForDevices()
     {
-        //Subscribe for device connections
-        int status = usbmuxd_subscribe(pt_usbmuxd_cb, this);
-        if (status)
+        // Subscribe for device connections
+        if (usbmuxd_subscribe(pt_usbmuxd_cb, this) != 0)
         {
+            portal_log_stderr("Failed to listen/subscribe!");
             return -1;
         }
 
-        _listening = true;
-        portal_log("%s: Listening for devices \n", __func__);
+        m_listening = true;
+        portal_log_stderr("%s: Listening for devices", __func__);
 
         return 0;
     }
 
     void Portal::stopListeningForDevices()
     {
-        if (_listening)
+        if (m_listening)
         {
             //Always returns 0
             usbmuxd_unsubscribe();
-            _listening = false;
+            m_listening = false;
         }
-    }
-
-    bool Portal::isListening()
-    {
-        return _listening;
     }
 
     void Portal::addDevice(const usbmuxd_device_info_t &device)
@@ -158,44 +138,65 @@ namespace portal
             return;
         }
 
-        if (_devices.find(device.handle) == _devices.end())
+        if (m_devices.find(device.handle) == m_devices.end())
         {
-            Device::shared_ptr sp = Device::shared_ptr(new Device(device));
-            _devices.insert(DeviceMap::value_type(device.handle, sp));
-            portal_log("PORTAL (%p): Added device: %i (%s)\n", this, device.product_id, device.udid);
+            auto sp = Device::shared_ptr(std::make_shared<Device>(device));
+            m_devices.insert(DeviceMap::value_type(device.handle, sp));
+
+            portal_log_stderr("PORTAL (%p): Added device: %i (%s)", this, device.product_id, device.udid);
         }
     }
 
     void Portal::removeDevice(const usbmuxd_device_info_t &device)
     {
-        DeviceMap::iterator it = _devices.find(device.handle);
-
-        if (it != _devices.end())
+        auto it = m_devices.find(device.handle);
+        if (it != m_devices.end())
         {
             it->second->disconnect();
-            _devices.erase(it);
-            portal_log("PORTAL (%p): Removed device: %i (%s)\n", this, device.product_id, device.udid);
+            m_devices.erase(it);
+
+            portal_log_stderr("PORTAL (%p): Removed device: %i (%s)", this, device.product_id, device.udid);
         }
     }
 
-    void Portal::channelDidReceivePacket(std::vector<char> packet, int type, int tag)
+    void Portal::channel_onPacketReceive(const Packet packet, const int type, const int tag)
     {
-        if (delegate != NULL) {
-            delegate->portalDeviceDidReceivePacket(packet, type, tag);
+        if (m_delegate)
+        {
+            m_delegate->portal_onDevicePacketReceive(packet, type, tag);
         }
     }
 
-    void Portal::channelDidStop()
+    void Portal::channel_onStop()
     {
-        portal_log("Channel Did Stop in portal\n");
+        portal_log_stderr("Channel Did Stop in portal");
     }
 
     Portal::~Portal()
     {
-        if (_listening)
+        if (m_listening)
         {
             usbmuxd_unsubscribe();
         }
     }
-}
 
+    void pt_usbmuxd_cb(const usbmuxd_event_t *event, void *user_data)
+    {
+        auto client = static_cast<Portal*>(user_data);
+        switch (event->event)
+        {
+        case UE_DEVICE_ADD:
+            client->addDevice(event->device);
+            break;
+
+        case UE_DEVICE_REMOVE:
+            client->removeDevice(event->device);
+            break;
+        }
+
+        if (client->m_delegate)
+        {
+            client->m_delegate->portal_onDeviceListUpdate(client->m_devices);
+        }
+    }
+} // namespace portal

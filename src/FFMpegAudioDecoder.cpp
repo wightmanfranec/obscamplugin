@@ -16,110 +16,103 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
  with this program. If not, see <https://www.gnu.org/licenses/>
  */
 
-#include "FFMpegAudioDecoder.h"
-#include <util/platform.h>
 #include <fstream>
-
-FFMpegAudioDecoder::FFMpegAudioDecoder()
-{
-    memset(&audio_frame, 0, sizeof(audio_frame));
-}
+#include <util/platform.h>
+#include "FFMpegAudioDecoder.hpp"
 
 FFMpegAudioDecoder::~FFMpegAudioDecoder()
 {
-    this->Shutdown();
-    // Free the video decoder.
-    ffmpeg_decode_free(audio_decoder);
+    shutdown();
+    m_audioDecoder->free();
 }
 
-void FFMpegAudioDecoder::Init()
+void FFMpegAudioDecoder::init()
 {
-    // Start the thread.
-    this->start();
+    start();
 }
 
-void FFMpegAudioDecoder::Flush()
+void FFMpegAudioDecoder::Input(const Packet packet, const int type, const int tag)
 {
-    // Clear the queue
+    m_queue.add(new PacketItem(packet, type, tag));
 }
 
-void FFMpegAudioDecoder::Drain()
+void FFMpegAudioDecoder::flush()
 {
-    // Drain the queue
 }
 
-void FFMpegAudioDecoder::Shutdown()
+void FFMpegAudioDecoder::drain()
 {
-    mQueue.stop();
-    this->join();
 }
 
-void FFMpegAudioDecoder::Input(std::vector<char> packet, int type, int tag)
+void FFMpegAudioDecoder::shutdown()
 {
-    // Create a new packet item and enqueue it.
-    PacketItem *item = new PacketItem(packet, type, tag);
-    this->mQueue.add(item);
+    m_queue.stop();
+    join();
 }
 
 void FFMpegAudioDecoder::processPacketItem(PacketItem *packetItem)
 {
-    uint64_t cur_time = os_gettime_ns();
+    const uint64_t cur_time = os_gettime_ns();
 
-    if (!ffmpeg_decode_valid(audio_decoder))
+    if (!m_audioDecoder->isValid())
     {
-        if (ffmpeg_decode_init(audio_decoder, AV_CODEC_ID_AAC) < 0)
+        if (m_audioDecoder->init(AV_CODEC_ID_AAC) < 0)
         {
             blog(LOG_WARNING, "Could not initialize audio decoder");
             return;
         }
     }
 
-    auto packet = packetItem->getPacket();
-    unsigned char *data = (unsigned char *)packet.data();
+    const auto packet = packetItem->getPacket();
+    const auto data = static_cast<unsigned char *>(packet.data());
 
-    if (packetItem->getType() == 102) {
-
-        bool got_output;
-
-        bool success = ffmpeg_decode_audio(audio_decoder, data, packet.size(), &audio_frame, &got_output);
-
+    if (packetItem->getType() == 102)
+    {
+        bool got_output{false};
+        const auto success = m_audioDecoder->decodeAudio(data, packet.size(), &m_audioFrame, &got_output);
         if (!success)
         {
             blog(LOG_WARNING, "Error decoding audio");
             return;
         }
 
-        if (got_output && source != NULL)
+        if (got_output && source)
         {
-            audio_frame.timestamp = cur_time;
-            obs_source_output_audio(source, &audio_frame);
+            m_audioFrame.timestamp = cur_time;
+            obs_source_output_audio(source, &m_audioFrame);
         }
     }
 }
 
-void *FFMpegAudioDecoder::run() {
-
-    while (shouldStop() == false) {
-
-        PacketItem *item = (PacketItem *)mQueue.remove();
-
-        if (item != NULL) {
-            this->processPacketItem(item);
+void *FFMpegAudioDecoder::run()
+{
+    while (!isStopped())
+    {
+        auto item = static_cast<PacketItem *>(m_queue.remove());
+        if (item)
+        {
+            processPacketItem(item);
             delete item;
         }
 
         // Check queue lengths
 
-        const int queueSize = mQueue.size();
-        if (queueSize > 25) {
+        const std::size_t queueSizeThreshold{25};
+
+        const int queueSize = m_queue.size();
+        if (queueSize > queueSizeThreshold)
+        {
             blog(LOG_WARNING, "Audio Decoding queue overloaded. %d frames behind. Please use a lower quality setting.", queueSize);
 
-            if (queueSize > 25) {
-                while (mQueue.size() > 5) {
-                    mQueue.remove();
+            if (queueSize > queueSizeThreshold)
+            {
+                while (m_queue.size() > 5)
+                {
+                    m_queue.remove();
                 }
             }
         }
     }
-    return NULL;
+
+    return nullptr;
 }

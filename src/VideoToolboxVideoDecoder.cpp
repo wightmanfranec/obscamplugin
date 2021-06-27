@@ -16,274 +16,272 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
  with this program. If not, see <https://www.gnu.org/licenses/>
  */
 
-#import "VideoToolboxVideoDecoder.h"
+#include "VideoToolboxVideoDecoder.hpp"
 
 #define NAL_LENGTH_PREFIX_SIZE 4
 
-VideoToolboxDecoder::VideoToolboxDecoder()
-{
-    waitingForSps = true;
-    waitingForPps = true;
-    mSession = NULL;
-    mFormat = NULL;
-
-    memset(&frame, 0, sizeof(frame));
-}
-
 VideoToolboxDecoder::~VideoToolboxDecoder()
 {
-    this->Shutdown();
+    shutdown();
 }
 
-void VideoToolboxDecoder::Init()
+void VideoToolboxDecoder::init()
 {
-    // Start the thread.
-    this->start();
+    start();
 }
 
-void VideoToolboxDecoder::Flush()
+void VideoToolboxDecoder::input(const Packet packet, const int type, const int tag)
 {
-    // Clear the queue
-    while(this->mQueue.size() > 0) {
-        this->mQueue.remove();
+    m_queue.add(new PacketItem(packet, type, tag));
+}
+
+void VideoToolboxDecoder::flush()
+{
+    while (m_queue.size() > 0)
+    {
+        m_queue.remove();
     }
 
-    VTDecompressionSessionInvalidate(mSession);
-    mSession = NULL;
+    VTDecompressionSessionInvalidate(m_session);
+    m_session = nullptr;
 }
 
-void VideoToolboxDecoder::Drain()
+void VideoToolboxDecoder::drain()
 {
-
 }
 
-void VideoToolboxDecoder::Shutdown()
+void VideoToolboxDecoder::shutdown()
 {
-    mQueue.stop();
+    m_queue.stop();
 
-    if (mSession != NULL) {
-        VTDecompressionSessionInvalidate(mSession);
+    if (m_session)
+    {
+        VTDecompressionSessionInvalidate(m_session);
+        m_session = nullptr;
     }
 
-    mSession = NULL;
-
-    this->join();
+    join();
 }
 
-void *VideoToolboxDecoder::run() {
-
-    while (shouldStop() == false) {
-        PacketItem *item = (PacketItem *)mQueue.remove();
-        if (item != NULL) {
-            this->processPacketItem(item);
+void *VideoToolboxDecoder::run()
+{
+    while (!isStopped())
+    {
+        auto item = (PacketItem *)m_queue.remove();
+        if (item)
+        {
+            processPacketItem(item);
+            delete item;
         }
-        delete item;
     }
 
-    return NULL;
+    return nullptr;
 }
 
 void VideoToolboxDecoder::processPacketItem(PacketItem *packetItem)
 {
-    auto packet = packetItem->getPacket();
+    const auto packet = packetItem->getPacket();
+    const uint32_t frameSize = packet.size();
 
-    //    blog(LOG_INFO, "Input");
-
-    OSStatus status = 0;
-    uint32_t frameSize = packet.size();
-
-    if (frameSize < 3) {
+    if (frameSize < 3)
+    {
         return;
     }
 
-    int naluType = (packet[4] & 0x1F);
+    OSStatus status{0};
 
-    if (naluType == 7 || naluType == 8) {
-
+    const auto naluType = (packet[4] & 0x1F);
+    if (naluType == 7 || naluType == 8)
+    {
         // NALU is the SPS Parameter
-        if (naluType == 7) {
-
-            spsData = std::vector<char>(packet.begin() + 4, packet.end() + (frameSize - 4));
-
-            waitingForSps = false;
-            waitingForPps = true;
-
+        if (naluType == 7)
+        {
+            m_spsData = Packet(packet.begin() + 4, packet.end() + (frameSize - 4));
+            m_waitingForSps = false;
+            m_waitingForPps = true;
         }
 
         // NALU is the PPS Parameter
-        if (naluType == 8) {
-
-            ppsData = std::vector<char>(packet.begin() + 4, packet.end() + (frameSize - 4));
-
-            waitingForPps = false;
+        if (naluType == 8)
+        {
+            m_ppsData = Packet(packet.begin() + 4, packet.end() + (frameSize - 4));
+            m_waitingForPps = false;
         }
 
-        if (!waitingForPps && !waitingForSps) {
-
-            const uint8_t * const parameterSetPointers[] = { (uint8_t *)spsData.data(), (uint8_t *)ppsData.data() };
-            const size_t parameterSetSizes[] = { spsData.size(), ppsData.size() };
-
-            status = CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault,
-                                                                         2, /* count of parameter sets */
-                                                                         parameterSetPointers,
-                                                                         parameterSetSizes,
-                                                                         NAL_LENGTH_PREFIX_SIZE,
-                                                                         &mFormat);
-
-            if (status != noErr) {
-                blog(LOG_INFO, "Failed to create format description");
-                mFormat = NULL;
-            } else {
-
-                if (mSession == NULL) {
-                    this->createDecompressionSession();
-                } else {
-
-                    bool needNewDecompSession = (VTDecompressionSessionCanAcceptFormatDescription(mSession, mFormat) == false);
-                    if(needNewDecompSession) {
-                        blog(LOG_INFO, "Created Decompression session");
-                        this->createDecompressionSession();
-                    }
-                }
-
-            }
-
-        } else {
+        if (m_waitingForPps || m_waitingForSps)
+        {
             return;
         }
 
+        const uint8_t *const parameterSetPointers[] = {(uint8_t *)m_spsData.data(), (uint8_t *)m_ppsData.data()};
+        const size_t parameterSetSizes[] = {m_spsData.size(), m_ppsData.size()};
+
+        status = CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault,
+                                                                     2, /* count of parameter sets */
+                                                                     parameterSetPointers,
+                                                                     parameterSetSizes,
+                                                                     NAL_LENGTH_PREFIX_SIZE,
+                                                                     &m_format);
+
+        if (status != noErr)
+        {
+            blog(LOG_INFO, "Failed to create format description");
+            m_format = nullptr;
+        }
+        else
+        {
+            if (!m_session)
+            {
+                createDecompressionSession();
+            }
+            else
+            {
+                const auto needNewDecompSession = (VTDecompressionSessionCanAcceptFormatDescription(m_session, m_format) == false);
+                if (needNewDecompSession)
+                {
+                    blog(LOG_INFO, "Created Decompression session");
+                    createDecompressionSession();
+                }
+            }
+        }
     }
 
     // Ensure that
-    if (ppsData.size() < 1 || spsData.size() < 1) {
+    if ((m_ppsData.size() < 1) ||
+        (m_spsData.size() < 1))
+    {
         return;
     }
 
-    if (waitingForSps || waitingForPps) {
+    if (m_waitingForSps || m_waitingForPps)
+    {
         return;
     }
 
-    if (mFormat == NULL) {
+    if (!m_format)
+    {
         return;
     }
 
     // This decoder only supports these two frames
-    if (naluType != 1 && naluType != 5) {
+    if ((naluType != 1) &&
+        (naluType != 5))
+    {
         return;
     }
 
-
-    if (mSession == NULL) {
-        this->createDecompressionSession();
+    if (!m_session)
+    {
+        createDecompressionSession();
     }
 
     // Create the sample data for the decoder
 
-    CMBlockBufferRef blockBuffer = NULL;
-    long blockLength = 0;
+    CMBlockBufferRef blockBuffer{nullptr};
+    long blockLength{0};
 
     // type 5 is an IDR frame NALU. The SPS and PPS NALUs should always be followed by an IDR (or IFrame) NALU, as far as I know
-    if (naluType == 5) {
-
+    if (naluType == 5)
+    {
         blockLength = frameSize;
 
         // replace the start code header on this NALU with its size.
         // AVCC format requires that you do this.
         // htonl converts the unsigned int from host to network byte order
-        uint32_t dataLength32 = htonl (blockLength - 4);
-        memcpy(packet.data(), &dataLength32, sizeof (uint32_t));
+        const uint32_t dataLength32 = htonl(blockLength - 4);
+        memcpy(packet.data(), &dataLength32, sizeof(uint32_t));
 
         // create a block buffer from the IDR NALU
-        status = CMBlockBufferCreateWithMemoryBlock(NULL, packet.data(),  // memoryBlock to hold buffered data
-                                                    blockLength,  // block length of the mem block in bytes.
-                                                    kCFAllocatorNull, NULL,
-                                                    0, // offsetToData
-                                                    blockLength,   // dataLength of relevant bytes, starting at offsetToData
-                                                    0, &blockBuffer);
-
+        status = CMBlockBufferCreateWithMemoryBlock(nullptr,
+                                                    packet.data(), // memoryBlock to hold buffered data
+                                                    blockLength,         // block length of the mem block in bytes.
+                                                    kCFAllocatorNull,
+                                                    nullptr,
+                                                    0,           // offsetToData
+                                                    blockLength, // dataLength of relevant bytes, starting at offsetToData
+                                                    0,
+                                                    &blockBuffer);
     }
 
     // NALU type 1 is non-IDR (or PFrame) picture
-    if (naluType == 1) {
+    if (naluType == 1)
+    {
         // non-IDR frames do not have an offset due to SPS and PSS, so the approach
         // is similar to the IDR frames just without the offset
         blockLength = frameSize;
 
         // again, replace the start header with the size of the NALU
-        uint32_t dataLength32 = htonl (blockLength - 4);
-        memcpy (packet.data(), &dataLength32, sizeof (uint32_t));
+        const uint32_t dataLength32 = htonl(blockLength - 4);
+        memcpy(packet.data(), &dataLength32, sizeof(uint32_t));
 
-        status = CMBlockBufferCreateWithMemoryBlock(NULL, packet.data(),  // memoryBlock to hold data. If NULL, block will be alloc when needed
-                                                    blockLength,  // overall length of the mem block in bytes
-                                                    kCFAllocatorNull, NULL,
-                                                    0,     // offsetToData
-                                                    blockLength,  // dataLength of relevant data bytes, starting at offsetToData
-                                                    0, &blockBuffer);
-
+        status = CMBlockBufferCreateWithMemoryBlock(nullptr,
+                                                    packet.data(), // memoryBlock to hold data. If NULL, block will be alloc when needed
+                                                    blockLength,         // overall length of the mem block in bytes
+                                                    kCFAllocatorNull,
+                                                    nullptr,
+                                                    0,           // offsetToData
+                                                    blockLength, // dataLength of relevant data bytes, starting at offsetToData
+                                                    0,
+                                                    &blockBuffer);
     }
 
     // now create our sample buffer from the block buffer,
-    if (status != noErr) {
-        //        NSLog(@"Error creating block buffer: %@", @(status));
+    if (status != noErr)
+    {
+        // NSLog(@"Error creating block buffer: %@", @(status));
         return;
     }
 
-    if (!blockBuffer) {
+    if (!blockBuffer)
+    {
         return;
     }
 
-    if (!mFormat) {
+    if (!m_format)
+    {
         return;
     }
 
     // here I'm not bothering with any timing specifics since in this case we displayed all frames immediately
-    CMSampleBufferRef sampleBuffer = NULL;
+    CMSampleBufferRef sampleBuffer{nullptr};
     const size_t sampleSize = blockLength;
     status = CMSampleBufferCreate(kCFAllocatorDefault,
                                   blockBuffer,
                                   true,
-                                  NULL,
-                                  NULL,
-                                  mFormat,
+                                  nullptr,
+                                  nullptr,
+                                  m_format,
                                   1,
                                   0,
-                                  NULL,
+                                  nullptr,
                                   1,
                                   &sampleSize,
                                   &sampleBuffer);
 
-    VTDecodeFrameFlags flags = 0;
-    VTDecodeInfoFlags flagOut;
+    VTDecodeFrameFlags flags{0};
+    VTDecodeInfoFlags flagOut{};
 
     auto now = os_gettime_ns();
 
-    VTDecompressionSessionDecodeFrame(mSession, sampleBuffer, flags,
-                                      (void*)now, &flagOut);
+    VTDecompressionSessionDecodeFrame(m_session, sampleBuffer, flags,
+                                      (void *)now, &flagOut);
 
     CFRelease(sampleBuffer);
 }
 
-
-
-void VideoToolboxDecoder::Input(std::vector<char> packet, int type, int tag)
+void VideoToolboxDecoder::outputFrame(CVPixelBufferRef pixelBufferRef)
 {
-    // Create a new packet item and enqueue it.
-    PacketItem *item = new PacketItem(packet, type, tag);
-    this->mQueue.add(item);
-}
+    auto image = pixelBufferRef;
 
-void VideoToolboxDecoder::OutputFrame(CVPixelBufferRef pixelBufferRef)
-{
-    CVImageBufferRef     image = pixelBufferRef;
-    //        obs_source_frame *frame = frame;
-
+    // obs_source_frame *frame = frame;
     // CMTime target_pts =
     // CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer);
     // CMTime target_pts_nano = CMTimeConvertScale(target_pts, NANO_TIMESCALE,
     // kCMTimeRoundingMethod_Default);
     // frame->timestamp = target_pts_nano.value;
 
-    if (!update_frame(source, &frame, image, mFormat)) {
+    if (!updateFrame(source, &frame, image, m_format))
+    {
         // Send blank video
         obs_source_output_video(source, nullptr);
         return;
@@ -294,95 +292,101 @@ void VideoToolboxDecoder::OutputFrame(CVPixelBufferRef pixelBufferRef)
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
 }
 
+bool VideoToolboxDecoder::updateFrame(obs_source_t* capture,
+                                      obs_source_frame* frame,
+                                      CVImageBufferRef imageBufferRef,
+                                      CMVideoFormatDescriptionRef formatDesc)
+{
+    if (!formatDesc)
+    {
+        return false;
+    }
+
+    const auto dims = CMVideoFormatDescriptionGetDimensions(formatDesc);
+
+    frame->timestamp = os_gettime_ns();
+    frame->width = dims.width;
+    frame->height = dims.height;
+    frame->format = VIDEO_FORMAT_BGRA;
+    // frame->format   = VIDEO_FORMAT_YUY2;
+
+    CVPixelBufferLockBaseAddress(imageBufferRef, kCVPixelBufferLock_ReadOnly);
+
+    if (!CVPixelBufferIsPlanar(imageBufferRef))
+    {
+        frame->linesize[0] = CVPixelBufferGetBytesPerRow(imageBufferRef);
+        frame->data[0] = static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(imageBufferRef));
+        return true;
+    }
+
+    const auto count = CVPixelBufferGetPlaneCount(imageBufferRef);
+    for (std::size_t i{0}; i < count; ++i)
+    {
+        frame->linesize[i] = CVPixelBufferGetBytesPerRowOfPlane(imageBufferRef, i);
+        frame->data[i] = static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(imageBufferRef, i));
+    }
+
+    return true;
+}
+
 static void
-DecompressionSessionDecodeFrameCallback(void *decompressionOutputRefCon,
-                                        void *sourceFrameRefCon,
+DecompressionSessionDecodeFrameCallback(void* decompressionOutputRefCon,
+                                        void* sourceFrameRefCon,
                                         OSStatus status,
                                         VTDecodeInfoFlags infoFlags,
                                         CVImageBufferRef imageBuffer,
                                         CMTime presentationTimeStamp,
                                         CMTime presentationDuration)
 {
+    auto decoder = static_cast<VideoToolboxDecoder *>(decompressionOutputRefCon);
 
-    VideoToolboxDecoder* decoder = static_cast<VideoToolboxDecoder*>(decompressionOutputRefCon);
-
-    if (status != noErr || !imageBuffer) {
+    if ((status != noErr) || !imageBuffer)
+    {
         blog(LOG_INFO, "VideoToolbox decoder returned no image");
-    } else if (infoFlags & kVTDecodeInfo_FrameDropped) {
+    }
+    else if (infoFlags & kVTDecodeInfo_FrameDropped)
+    {
         blog(LOG_INFO, "VideoToolbox dropped frame");
     }
 
-    decoder->OutputFrame(imageBuffer);
+    decoder->outputFrame(imageBuffer);
 }
 
 void VideoToolboxDecoder::createDecompressionSession()
 {
-    //    if (mSession != NULL) {
-    //        VTDecompressionSessionInvalidate(mSession);
-    //    }
+    m_session = nullptr;
 
-    mSession = NULL;
-
-    VTDecompressionOutputCallbackRecord callBackRecord;
+    VTDecompressionOutputCallbackRecord callBackRecord{};
     callBackRecord.decompressionOutputCallback = DecompressionSessionDecodeFrameCallback;
     callBackRecord.decompressionOutputRefCon = this;
 
     // Destination Pixel Buffer Attributes
-    CFMutableDictionaryRef destinationPixelBufferAttributes;
-    destinationPixelBufferAttributes = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFNumberRef number;
+    auto destinationPixelBufferAttributes = CFDictionaryCreateMutable(nullptr, 0,
+                                                                      &kCFTypeDictionaryKeyCallBacks,
+                                                                      &kCFTypeDictionaryValueCallBacks);
 
     int val = kCVPixelFormatType_32BGRA;
-    number = CFNumberCreate(NULL, kCFNumberSInt32Type, &val);
+    auto number = CFNumberCreate(nullptr, kCFNumberSInt32Type, &val);
     CFDictionarySetValue(destinationPixelBufferAttributes, kCVPixelBufferPixelFormatTypeKey, number);
     CFRelease(number);
 
     // Format Pixel Buffer Attributes
-    CFMutableDictionaryRef videoDecoderSpecification;
-    videoDecoderSpecification = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    auto videoDecoderSpecification = CFDictionaryCreateMutable(nullptr, 0,
+                                                               &kCFTypeDictionaryKeyCallBacks,
+                                                               &kCFTypeDictionaryValueCallBacks);
 
-    CFDictionarySetValue(videoDecoderSpecification, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
+    CFDictionarySetValue(videoDecoderSpecification,
+                         kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+                         kCFBooleanTrue);
 
-    int err = VTDecompressionSessionCreate(NULL, mFormat, videoDecoderSpecification, destinationPixelBufferAttributes, &callBackRecord, &mSession);
-    if(err != noErr) {
+    const auto err = VTDecompressionSessionCreate(nullptr, m_format,
+                                                  videoDecoderSpecification,
+                                                  destinationPixelBufferAttributes,
+                                                  &callBackRecord,
+                                                  &m_session);
+    if (err != noErr)
+    {
         blog(LOG_ERROR, "Failed creating Decompression session");
         return;
     }
 }
-
-bool VideoToolboxDecoder::update_frame(obs_source_t *capture, obs_source_frame *frame, CVImageBufferRef imageBufferRef, CMVideoFormatDescriptionRef formatDesc)
-{
-    // blog(LOG_INFO, "Update frame");
-    if (!formatDesc) {
-        // blog(LOG_INFO, "No format");
-
-        return false;
-    }
-
-    //    FourCharCode    fourcc = CMFormatDescriptionGetMediaSubType(formatDesc);
-    // video_format    format = format_from_subtype(fourcc);
-    CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(formatDesc);
-
-    frame->timestamp = os_gettime_ns();
-    frame->width    = dims.width;
-    frame->height   = dims.height;
-    frame->format   = VIDEO_FORMAT_BGRA;
-    //        frame->format   = VIDEO_FORMAT_YUY2;
-
-    CVPixelBufferLockBaseAddress(imageBufferRef, kCVPixelBufferLock_ReadOnly);
-
-    if (!CVPixelBufferIsPlanar(imageBufferRef)) {
-        frame->linesize[0] = CVPixelBufferGetBytesPerRow(imageBufferRef);
-        frame->data[0]     = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(imageBufferRef));
-        return true;
-    }
-
-    size_t count = CVPixelBufferGetPlaneCount(imageBufferRef);
-    for (size_t i = 0; i < count; i++) {
-        frame->linesize[i] = CVPixelBufferGetBytesPerRowOfPlane(imageBufferRef, i);
-        frame->data[i]     = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(imageBufferRef, i));
-    }
-    return true;
-
-}
-

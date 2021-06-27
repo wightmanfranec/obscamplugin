@@ -16,123 +16,106 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
  with this program. If not, see <https://www.gnu.org/licenses/>
  */
 
-#include "Device.hpp"
+#include <string>
 #include <list>
 #include <sstream>
 #include <vector>
+#include <algorithm>
+#include "Device.hpp"
 
 namespace portal
 {
+    Device::DeviceMap Device::m_devices{};
 
-    Device::DeviceMap Device::s_devices;
-    //Device::ChannelsVec Device::s_connectedChannels;
-
-    Device::Device(const usbmuxd_device_info_t &device) : _connected(false),
-    _device(device),
-    _uuid(_device.udid),
-    _productId(std::to_string(_device.product_id))
+    Device::Device(const usbmuxd_device_info_t &device)
+        :
+        m_connected{false},
+        m_device{device},
+        m_uuid{m_device.udid},
+        m_productId{std::to_string(m_device.product_id)}
     {
-        s_devices[_uuid].push_back(this);
-        portal_log("Added %p to device list", this);
+        m_devices[m_uuid].push_back(this);
+        portal_log_stderr("Added %p to device list", this);
     }
 
-    Device::Device(const Device &other) : _connected(other._connected),
-    _device(other._device),
-    _uuid(other._uuid)
+    Device::Device(const Device &other)
+        :
+        m_connected{other.m_connected},
+        m_device{other.m_device},
+        m_uuid{other.m_uuid}
     {
-        s_devices[_uuid].push_back(this);
-        portal_log("Added %p to device list (copy)", this);
-    }
-
-    Device &Device::operator=(const Device &rhs)
-    {
-        removeFromDeviceList();
-
-        this->_connected = rhs._connected;
-        this->_device = rhs._device;
-        this->_uuid = rhs._uuid;
-        this->_productId = rhs._productId;
-
-        s_devices[_uuid].push_back(this);
-
-        return *this;
-    }
-
-    const std::string &Device::uuid() const
-    {
-        return _uuid;
-    }
-
-    int Device::usbmuxdHandle() const
-    {
-        return _device.handle;
-    }
-
-    uint16_t Device::productID() const
-    {
-        return _device.product_id;
-    }
-
-    int Device::connect(uint16_t port, std::shared_ptr<ChannelDelegate> newChannelDelegate, int attempts)
-    {
-        int retval = 0;
-        int conn = usbmuxd_connect(_device.handle, port);
-
-        if (conn > 0)
-        {
-            connectedChannel = std::shared_ptr<Channel>(new Channel(port, conn));
-            connectedChannel->configureProtocolDelegate();
-            connectedChannel->setDelegate(newChannelDelegate);
-        } else {
-
-            if (attempts > 0) {
-                connect(port, newChannelDelegate, attempts - 1);
-            }
-        }
-
-        return retval;
-    }
-
-    void Device::disconnect()
-    {
-        if (isConnected() == false) {
-            return;
-        }
-
-        connectedChannel->close();
-        connectedChannel = nullptr;
-    }
-
-    bool Device::isConnected() const
-    {
-        if (connectedChannel == nullptr) {
-            return false;
-        }
-
-        return true;
-    }
-
-    void Device::removeFromDeviceList()
-    {
-        //Remove this device from the tracked devices
-        std::vector<Device *> &devs = s_devices[_uuid];
-        std::vector<Device *>::iterator it = std::find(devs.begin(), devs.end(), this);
-        if (it != devs.end())
-            devs.erase(it);
+        m_devices[m_uuid].push_back(this);
+        portal_log_stderr("Added %p to device list (copy)", this);
     }
 
     Device::~Device()
     {
         disconnect();
         removeFromDeviceList();
-        portal_log("Removed %p from device list", this);
+        portal_log_stderr("Removed %p from device list", this);
+    }
+
+    Device &Device::operator=(const Device &rhs)
+    {
+        removeFromDeviceList();
+
+        m_connected = rhs.m_connected;
+        m_device = rhs.m_device;
+        m_uuid = rhs.m_uuid;
+        m_productId = rhs.m_productId;
+
+        m_devices[m_uuid].push_back(this);
+
+        return *this;
+    }
+
+    int Device::connect(const uint16_t port, std::shared_ptr<ChannelDelegate> channelDelegate, const int attempts)
+    {
+        const auto conn = usbmuxd_connect(m_device.handle, port);
+        if (conn > 0)
+        {
+            m_connectedChannel = std::make_shared<Channel>(port, conn);
+            m_connectedChannel->configureProtocolDelegate();
+            m_connectedChannel->setDelegate(channelDelegate);
+        }
+        else
+        {
+            if (attempts > 0)
+            {
+                connect(port, channelDelegate, attempts - 1);
+            }
+        }
+
+        return 0;
+    }
+
+    void Device::disconnect()
+    {
+        if (isConnected())
+        {
+            m_connectedChannel->close();
+            m_connectedChannel = nullptr;
+        }
+    }
+
+    bool Device::isConnected() const
+    {
+        return (m_connectedChannel != nullptr);
+    }
+
+    void Device::removeFromDeviceList()
+    {
+        auto &devs = m_devices[m_uuid];
+        auto it = std::find(devs.begin(), devs.end(), this);
+        if (it != devs.end())
+        {
+            devs.erase(it);
+        }
     }
 
     std::ostream &operator<<(std::ostream &os, const Device &v)
     {
-        os << "v.productName()"
-        << " [ " << v.uuid() << " ]";
+        os << "v.productName()" << " [ " << v.uuid() << " ]";
         return os;
     }
-}
-
+} // namespace portal

@@ -16,119 +16,116 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
  with this program. If not, see <https://www.gnu.org/licenses/>
  */
 
-#include "FFMpegVideoDecoder.h"
+#include "FFMpegVideoDecoder.hpp"
 #include <util/platform.h>
-
-FFMpegVideoDecoder::FFMpegVideoDecoder()
-{
-    memset(&video_frame, 0, sizeof(video_frame));
-}
 
 FFMpegVideoDecoder::~FFMpegVideoDecoder()
 {
-    this->Shutdown();
-    // Free the video decoder.
-    ffmpeg_decode_free(video_decoder);
+    shutdown();
+    m_videoDecoder->free();
 }
 
-void FFMpegVideoDecoder::Init()
+void FFMpegVideoDecoder::init()
 {
-    // Start the thread.
-    this->start();
+    start();
 }
 
-void FFMpegVideoDecoder::Flush()
+void FFMpegVideoDecoder::input(const Packet packet, const int type, const int tag)
 {
-    // Clear the queue
-    while(this->mQueue.size() > 0) {
-        this->mQueue.remove();
+    m_queue.add(new PacketItem(packet, type, tag));
+}
+
+void FFMpegVideoDecoder::flush()
+{
+    while (m_queue.size() > 0)
+    {
+        m_queue.remove();
     }
 
-    mMutex.lock();
+    m_mutex.lock();
     // Re-initialize the decoder
-    ffmpeg_decode_free(video_decoder);
-    mMutex.unlock();
+    m_videoDecoder->free();
+    m_mutex.unlock();
 }
 
-void FFMpegVideoDecoder::Drain()
+void FFMpegVideoDecoder::drain()
 {
-    // Drain the queue
 }
 
-void FFMpegVideoDecoder::Shutdown()
+void FFMpegVideoDecoder::shutdown()
 {
-    mQueue.stop();
-    this->join();
-}
-
-void FFMpegVideoDecoder::Input(std::vector<char> packet, int type, int tag)
-{
-    // Create a new packet item and enqueue it.
-    PacketItem *item = new PacketItem(packet, type, tag);
-    this->mQueue.add(item);
+    m_queue.stop();
+    join();
 }
 
 void FFMpegVideoDecoder::processPacketItem(PacketItem *packetItem)
 {
     mMutex.lock();
-    uint64_t cur_time = os_gettime_ns();
-    if (!ffmpeg_decode_valid(video_decoder))
+    const uint64_t cur_time = os_gettime_ns();
+    if (!m_videoDecoder->isValid())
     {
-        if (ffmpeg_decode_init(video_decoder, AV_CODEC_ID_H264) < 0)
+        if (m_videoDecoder->init(AV_CODEC_ID_H264) < 0)
         {
             blog(LOG_WARNING, "Could not initialize video decoder");
             return;
         }
     }
 
-    auto packet = packetItem->getPacket();
-    unsigned char *data = (unsigned char *)packet.data();
-    long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto packet = packetItem->getPacket();
+    const auto data = static_cast<unsigned char *>(packet.data());
 
-    if (packetItem->getType() == 101) {
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-        bool got_output;
-        bool success = ffmpeg_decode_video(video_decoder, data, packet.size(), &ts,
-                                           &video_frame, &got_output);
+    if (packetItem->getType() == 101)
+    {
+        bool got_output{false};
+        const auto success = m_videoDecoder->decodeVideo(data, packet.size(), &ts,
+                                                         &m_videoFrame, &got_output);
         if (!success)
         {
             blog(LOG_WARNING, "Error decoding video");
-            mMutex.unlock();
+            m_mutex.unlock();
             return;
         }
 
-        if (got_output && source != NULL)
+        if (got_output && source)
         {
-            video_frame.timestamp = cur_time;
-            obs_source_output_video(source, &video_frame);
+            m_videoFrame.timestamp = cur_time;
+            obs_source_output_video(source, &m_videoFrame);
         }
     }
-    mMutex.unlock();
+    m_mutex.unlock();
 }
 
-void *FFMpegVideoDecoder::run() {
-
-    while (shouldStop() == false) {
-
-        PacketItem *item = (PacketItem *)mQueue.remove();
-
-        if (item != NULL) {
-            this->processPacketItem(item);
+void *FFMpegVideoDecoder::run()
+{
+    while (!isStopped())
+    {
+        auto item = static_cast<PacketItem *>(m_queue.remove());
+        if (item)
+        {
+            processPacketItem(item);
             delete item;
         }
 
         // Check queue lengths
 
-        const int queueSize = mQueue.size();
-        if (queueSize > 25) {
+        const std::size_t queueSizeThreshold{25};
+
+        const auto queueSize = m_queue.size();
+        if (queueSize > queueSizeThreshold)
+        {
             blog(LOG_WARNING, "Video Decoding queue overloaded. %d frames behind. Please use a lower quality setting.", queueSize);
 
-            if (queueSize > 25) {
-                while (mQueue.size() > 5) {
-                    mQueue.remove();
+            if (queueSize > queueSizeThreshold)
+            {
+                while (m_queue.size() > 5)
+                {
+                    m_queue.remove();
                 }
             }
         }
     }
-    return NULL;
+
+    return nullptr;
 }

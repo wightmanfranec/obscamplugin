@@ -1,5 +1,5 @@
 /*
-portal
+obs-iDevice-cam-source
 Copyright (C) 2018	Will Townsend <will@townsend.io>
 
 This program is free software; you can redistribute it and/or modify
@@ -16,33 +16,15 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <chrono>
-#include <cstdlib>
-#include <csignal>
-#include "Portal.hpp"
+#ifndef IDEVICESCAMSOURCE_H
+#define IDEVICESCAMSOURCE_H
 
-bool m_running{true};
+#include <obs-module.h>
 
-int main()
-{
-    // Register signal handler for SIGINT
-    signal(SIGINT, [](auto sig){ m_running = false; });
+#define blog(level, fmt, ...)                                      \
+    do                                                             \
+    {                                                              \
+        blog(level, "[obs-ios-camera-plugin] " fmt, ##__VA_ARGS__) \
+    } while (0)
 
-    portal_log_stdout("Looking for devices");
-
-    auto client = std::make_shared<portal::Portal>();
-    if (client->startListeningForDevices() != 0)
-    {
-        return EXIT_FAILURE;
-    }
-
-    using namespace std::chrono_literals;
-    while (m_running && client->isListening())
-    {
-        std::this_thread::sleep_for(100ms);
-    }
-
-    portal_log_stdout("Done!");
-
-    return EXIT_SUCCESS;
-}
+#endif // IDEVICESCAMSOURCE_H

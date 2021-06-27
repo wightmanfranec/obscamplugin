@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.1)
 project(obs-iDevice-cam-source)
 
 set(CMAKE_PREFIX_PATH "${QTDIR}")
@@ -13,7 +13,9 @@ endif()
 
 find_package(LibObs REQUIRED)
 
-find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil)
+# find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil)
+find_library(AVCODEC_LIBRARY avcodec)
+find_library(AVUTIL_LIBRARY avutil)
 # find_ffmpeg_library(avcodec)
 # find_ffmpeg_library(avutil)
 
@@ -154,7 +156,7 @@ set(portal_HEADERS
 	deps/portal/src/Device.hpp
 	deps/portal/src/Portal.hpp
 	deps/portal/src/Protocol.hpp
-	deps/portal/src/logging.h
+	deps/portal/src/logging.hpp
 )
 
 set(portal_SOURCES
@@ -176,37 +178,34 @@ target_link_libraries(portal
 	libusbmuxd
 )
 
-
-## -- 
+## --
 
 set(ENABLE_PROGRAMS false)
 
 set(obs-iDevice-cam-source_SOURCES
 	src/obs-ios-camera-plugin.cpp
 	src/obs-iDevice-cam-source.cpp
-	src/ffmpeg-decode.c
-	src/VideoDecoder.cpp
+	src/FFMpegDecode.cpp
 	src/FFMpegVideoDecoder.cpp
 	src/FFMpegAudioDecoder.cpp
 	src/Thread.cpp)
 
 set(obs-iDevice-cam-source_HEADERS
-	src/obs-iDevice-cam-source.h
-	src/ffmpeg-decode.h
-	src/VideoDecoder.h
-	src/FFMpegVideoDecoder.h
-	src/FFMpegAudioDecoder.h
+	src/obs-iDevice-cam-source.hpp
+	src/FFMpegDecode.hpp
+	src/Decoder.hpp
+	src/FFMpegVideoDecoder.hpp
+	src/FFMpegAudioDecoder.hpp
 	src/Thread.hpp
 	src/Queue.hpp)
 
 if(APPLE)
-
 	message("Linking Video Toolbox")
 
 	find_library(AVFOUNDATION AVFoundation)
 	find_library(COCOA Cocoa)
 	find_library(COREFOUNDATION CoreFoundation)
-	find_library(COREMEDIA CoreMedia)	
+	find_library(COREMEDIA CoreMedia)
 	find_library(COREVIDEO CoreVideo)
 	find_library(COREMEDIAIO CoreMediaIO)
 	find_library(VIDEOTOOLBOX VideoToolbox)
@@ -222,24 +221,22 @@ if(APPLE)
 
 	list(APPEND obs-iDevice-cam-source_SOURCES
 		src/VideoToolboxVideoDecoder.cpp)
-	
+
 	list(APPEND obs-iDevice-cam-source_HEADERS
-		src/VideoToolboxVideoDecoder.h)
+		src/VideoToolboxVideoDecoder.hpp)
 
 	add_definitions(-fobjc-arc)
-
-
 endif()
 
 # --- Platform-independent build settings ---
-add_library(obs-iDevice-cam-source MODULE 
+add_library(obs-iDevice-cam-source MODULE
 	${obs-iDevice-cam-source_SOURCES}
 	${obs-iDevice-cam-source_HEADERS})
 
 
 #find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil)
 
-include_directories( 
+include_directories(
 	"${LIBOBS_INCLUDE_DIR}/../UI/obs-frontend-api"
 	${FFMPEG_INCLUDE_DIRS}
 )
@@ -253,13 +250,12 @@ if(MSVC)
 
 endif()
 
-
-target_link_libraries(obs-iDevice-cam-source 
+target_link_libraries(obs-iDevice-cam-source
 	libobs
 	portal
 	${FFMPEG_LIBRARIES}
 )
- 
+
 # --- End of section ---
 
 # --- Windows-specific build settings and tasks ---
@@ -310,7 +306,7 @@ if(WIN32)
 			"${CMAKE_COMMAND}" -E copy
 				"$<TARGET_FILE:obs-iDevice-cam-source>"
 				"${RELEASE_DIR}/obs-plugins/${OBS_ARCH_NAME}")
-				
+
 
         # If config is RelWithDebInfo, package release files
 		COMMAND if $<CONFIG:RelWithDebInfo>==1 (
@@ -332,7 +328,6 @@ if(WIN32)
             "${CMAKE_COMMAND}" -E copy
 			    "$<TARGET_PDB_FILE:obs-iDevice-cam-source>"
 			    "${RELEASE_DIR}/obs-plugins/${OBS_ARCH_NAME}")
-
 
 		# Copy to obs-studio dev environment for immediate testing
 		COMMAND if $<CONFIG:Debug>==1 (
@@ -359,7 +354,7 @@ if(APPLE)
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -fvisibility=default")
 	set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-unused-function -Werror-implicit-function-declaration -Wno-missing-field-initializers ${CMAKE_CXX_FLAGS} -fno-strict-aliasing")
 	set(CMAKE_C_FLAGS "-Wall -Wextra -Wno-unused-function -Werror-implicit-function-declaration -Wno-missing-braces -Wno-missing-field-initializers ${CMAKE_C_FLAGS} -std=gnu99 -fno-strict-aliasing")
-	
+
 	set_target_properties(obs-iDevice-cam-source PROPERTIES PREFIX "")
 	target_link_libraries(obs-iDevice-cam-source "${OBS_FRONTEND_LIB}"
 		${AVFOUNDATION}

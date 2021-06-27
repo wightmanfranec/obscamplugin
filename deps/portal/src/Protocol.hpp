@@ -20,14 +20,15 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
 #define PORTAL_SIMPLE_DATA_PACKET_PROTOCOL_H
 
 #include <vector>
+#include <memory>
 
-#include "logging.h"
+#include "logging.hpp"
 
 namespace portal
 {
-
     // This is what we send as the header for each frame.
-    typedef struct _PortalFrame {
+    typedef struct _PortalFrame final
+    {
         // The version of the frame and protocol.
         uint32_t version;
 
@@ -45,39 +46,32 @@ namespace portal
 
     } PortalFrame;
 
-    class SimpleDataPacketProtocolDelegate
+    struct SimpleDataPacketProtocolDelegate
     {
-    public:
-        virtual void simpleDataPacketProtocolDelegateDidProcessPacket(std::vector<char> packet, int type, int tag) = 0;
+        virtual void simpleDataPacketProtocolDelegate_onProcessPacket(std::vector<char> packet, const int type, const int tag) = 0;
         virtual ~SimpleDataPacketProtocolDelegate(){};
     };
 
-    class SimpleDataPacketProtocol: public std::enable_shared_from_this<SimpleDataPacketProtocol>
+    class SimpleDataPacketProtocol final : public std::enable_shared_from_this<SimpleDataPacketProtocol>
     {
     public:
         SimpleDataPacketProtocol();
         ~SimpleDataPacketProtocol();
 
-        std::shared_ptr<SimpleDataPacketProtocol> getptr()
-        {
-            return shared_from_this();
-        }
+        std::shared_ptr<SimpleDataPacketProtocol> getptr() { return shared_from_this(); }
 
-        int processData(char *data, int dataLength);
-
+        int processData(const char *data, const int dataLength);
         void reset();
 
-        void setDelegate(std::shared_ptr<SimpleDataPacketProtocolDelegate> newDelegate)
+        void setDelegate(std::shared_ptr<SimpleDataPacketProtocolDelegate> delegate)
         {
-            delegate = newDelegate;
+            m_delegate = delegate;
         }
 
     private:
-        std::weak_ptr<SimpleDataPacketProtocolDelegate> delegate;
-
-        std::vector<char> buffer;
+        std::weak_ptr<SimpleDataPacketProtocolDelegate> m_delegate{};
+        std::vector<char> m_buffer{};
     };
-}
+} // namespace portal
 
 #endif
-

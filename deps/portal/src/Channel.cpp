@@ -20,87 +20,78 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
 
 namespace portal
 {
-
-    Channel::Channel(int port_, int conn_)
+    Channel::Channel(const int port, const int conn)
+        : m_port{port},
+          m_conn{conn},
+          m_protocol{std::make_unique<SimpleDataPacketProtocol>()},
+          m_running{StartInternalThread()}
     {
-        port = port_;
-        conn = conn_;
-
-        protocol = std::make_unique<SimpleDataPacketProtocol>();
-
-        running = StartInternalThread();
     }
 
     Channel::~Channel()
     {
-        running = false;
+        m_running = false;
         WaitForInternalThreadToExit();
-        portal_log("%s: Deallocating\n", __func__);
+        portal_log_stderr("%s: Deallocating", __func__);
     }
 
     void Channel::close()
     {
-        running = false;
+        m_running = false;
         WaitForInternalThreadToExit();
-        usbmuxd_disconnect(conn);
+        usbmuxd_disconnect(m_conn);
     }
 
-    /** Returns true if the thread was successfully started, false if there was an error starting the thread */
     bool Channel::StartInternalThread()
     {
-        _thread = std::thread(InternalThreadEntryFunc, this);
+        m_thread = std::thread(InternalThreadEntryFunc, this);
         return true;
     }
 
-    /** Will not return until the internal thread has exited. */
     void Channel::WaitForInternalThreadToExit()
     {
-        if (_thread.joinable())
+        if (m_thread.joinable())
         {
-            _thread.join();
+            m_thread.join();
         }
     }
 
     void Channel::StopInternalThread()
     {
-        running = false;
+        m_running = false;
     }
 
     void Channel::InternalThreadEntry()
     {
-        while (running)
+        while (m_running)
         {
+            constexpr uint32_t numberOfBytesToAskFor = 65536; // (1 << 16); // This is the value in DarkLighting
 
-            const uint32_t numberOfBytesToAskFor = 65536; // (1 << 16); // This is the value in DarkLighting
             uint32_t numberOfBytesReceived = 0;
+            char buffer[numberOfBytesToAskFor] = {0};
 
-            char buffer[numberOfBytesToAskFor];
-
-            int ret = usbmuxd_recv_timeout(conn, (char *)&buffer, numberOfBytesToAskFor, &numberOfBytesReceived, 10);
-
+            const int ret = usbmuxd_recv_timeout(m_conn, (char *)&buffer, numberOfBytesToAskFor, &numberOfBytesReceived, 10);
             if (ret == 0)
             {
-                if (numberOfBytesReceived > 0)
+                if ((numberOfBytesReceived > 0) && m_running)
                 {
-                    if (running) {
-                        protocol->processData((char *)buffer, numberOfBytesReceived);
-                    }
+                    m_protocol->processData((char *)buffer, numberOfBytesReceived);
                 }
             }
             else
             {
-                portal_log("There was an error receiving data");
-                running = false;
+                portal_log_stderr("There was an error receiving data");
+                m_running = false;
             }
         }
     }
 
-    void Channel::simpleDataPacketProtocolDelegateDidProcessPacket(std::vector<char> packet, int type, int tag)
+    void Channel::simpleDataPacketProtocolDelegate_onProcessPacket(const Packet packet, const int type, const int tag)
     {
-        std::shared_ptr<ChannelDelegate> strongDelegate = delegate.lock();
-        if (strongDelegate) {
-            strongDelegate->channelDidReceivePacket(packet, type, tag);
+        auto strongDelegate = m_delegate.lock();
+        if (strongDelegate)
+        {
+            strongDelegate->channel_onPacketReceive(packet, type, tag);
         }
     }
-}
-
+} // namespace portal

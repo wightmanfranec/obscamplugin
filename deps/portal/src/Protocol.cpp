@@ -18,92 +18,88 @@ Copyright (C) 2018-2019	Will Townsend <will@townsend.io>
 
 #include <cstdint>
 #include <iostream>
+#include <cstring>
+#include "Protocol.hpp"
 
 #ifdef WIN32
 #include <winsock2.h>
+#else
+#include <arpa/inet.h>
 #endif
-
-#include "Protocol.hpp"
 
 namespace portal
 {
-
     SimpleDataPacketProtocol::SimpleDataPacketProtocol()
     {
-        std::cout << "SimpleDataPacketProtocol created\n";
+        portal_log_stdout("SimpleDataPacketProtocol created");
     }
 
     SimpleDataPacketProtocol::~SimpleDataPacketProtocol()
     {
-        buffer.clear();
-        std::cout << "SimpleDataPacketProtocol destroyed\n";
+        m_buffer.clear();
+        portal_log_stdout("SimpleDataPacketProtocol destroyed");
     }
 
-    int SimpleDataPacketProtocol::processData(char *data, int dataLength)
+    int SimpleDataPacketProtocol::processData(const char *data, const int dataLength)
     {
         if (dataLength > 0)
         {
             // Add data recieved to the end of buffer.
-            buffer.insert(buffer.end(), data, data + dataLength);
+            m_buffer.insert(m_buffer.end(), data, data + dataLength);
         }
 
-        uint32_t length = 0;
-        // Ensure that the data inside the buffer is at least as big
-        // as the length variable (32 bit int)
-        // and then read it out
-        if (buffer.size() < sizeof(PortalFrame))
+        // Ensure that the data inside the buffer is at least as big as the
+        // length variable (32 bit int) and then read it out
+        if (m_buffer.size() < sizeof(PortalFrame))
         {
             return -1;
         }
-        else
+
+        // Read the portal frame out
+        PortalFrame frame;
+        memcpy(&frame, &m_buffer[0], sizeof(PortalFrame));
+
+        uint32_t length = 0;
+        length = ntohl(length);
+
+        frame.version = ntohl(frame.version);
+        frame.type = ntohl(frame.type);
+        frame.tag = ntohl(frame.tag);
+        frame.payloadSize = ntohl(frame.payloadSize);
+
+        if (frame.payloadSize == 0)
         {
-            // Read the portal frame out
-            PortalFrame frame;
-
-            memcpy(&frame, &buffer[0], sizeof(PortalFrame));
-            length = ntohl(length);
-
-            frame.version = ntohl(frame.version);
-            frame.type = ntohl(frame.type);
-            frame.tag = ntohl(frame.tag);
-            frame.payloadSize = ntohl(frame.payloadSize);
-
-            if (frame.payloadSize == 0) {
-                printf("Payload was 0");
-                buffer.erase(buffer.begin(), buffer.begin() + sizeof(PortalFrame) + frame.payloadSize);
-                return -1;
-            }
-
-            // Read payload size now..
-            // Check if we've got all the data for the packet
-
-            if (buffer.size() > (sizeof(PortalFrame) + frame.payloadSize)) {
-
-                // Read length bytes as that is the packet
-                std::vector<char>::const_iterator first = buffer.begin() + sizeof(PortalFrame);
-                std::vector<char>::const_iterator last = buffer.begin() + sizeof(PortalFrame) + frame.payloadSize;
-                std::vector<char> newVec(first, last);
-
-                std::shared_ptr<SimpleDataPacketProtocolDelegate> strongDelegate = delegate.lock();
-                if (strongDelegate) {
-                    strongDelegate->simpleDataPacketProtocolDelegateDidProcessPacket(newVec, frame.type, frame.tag);
-                }
-
-                // Remove the data from buffer
-                buffer.erase(buffer.begin(), buffer.begin() + sizeof(PortalFrame) + frame.payloadSize);
-
-                // Attempt to parse another packet
-                processData(nullptr, 0);
-
-            } else {
-
-                // We haven't got the data for the packet just yet, so wait for next time!
-                return -1;
-            }
-
+            portal_log_stdout("Payload is empty!");
+            m_buffer.erase(m_buffer.begin(), m_buffer.begin() + sizeof(PortalFrame) + frame.payloadSize);
+            return -1;
         }
+
+        // Read payload size now
+        // Check if we've got all the data for the packet
+
+        if (m_buffer.size() <= (sizeof(PortalFrame) + frame.payloadSize))
+        {
+            // We haven't got the data for the packet just yet, so wait for next time!
+            return -1;
+        }
+
+        // Read length bytes as that is the packet
+        const auto first = m_buffer.begin() + sizeof(PortalFrame);
+        const auto last = m_buffer.begin() + sizeof(PortalFrame) + frame.payloadSize;
+        auto newVec = std::vector<char>(first, last);
+
+        auto strongDelegate = m_delegate.lock();
+        if (strongDelegate)
+        {
+            strongDelegate->simpleDataPacketProtocolDelegateDidProcessPacket(newVec, frame.type, frame.tag);
+        }
+
+        // Remove the data from buffer
+        m_buffer.erase(m_buffer.begin(), m_buffer.begin() + sizeof(PortalFrame) + frame.payloadSize);
+
+        // Attempt to parse another packet
+        processData(nullptr, 0);
 
         return 0;
     }
-}
-
+} // namespace portal

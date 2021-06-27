@@ -18,53 +18,53 @@
 
 #include "Thread.hpp"
 
-Thread::Thread(): mThread(nullptr), mRunning(false), mShouldStop(false) { }
+Thread::Thread()
+    :
+    m_thread{nullptr},
+    m_isRunning{false},
+    m_isStopped{false}
+{
+}
 
 Thread::~Thread()
 {
-    if (mThread == nullptr) {
-        return;
-    }
+    if (m_thread)
+    {
+        m_isStopped = true;
+        if (m_isRunning && m_thread->joinable())
+        {
+            m_thread->join();
+        }
 
-    mShouldStop = true;
-    if (mRunning && mThread->joinable()) {
-        mThread->join();
+        delete m_thread;
+        m_thread = nullptr;
     }
-
-    delete mThread;
-    mThread = nullptr;
 }
 
 void Thread::start()
 {
-    if (mThread != nullptr) {
-        return;
+    if (!m_thread)
+    {
+        m_isStopped = false;
+        m_thread= new std::thread([this]{ this->run(); });
+        m_isRunning = true;
     }
-
-    mShouldStop = false;
-
-    mThread = new std::thread([this]{
-        this->run();
-    });
-
-    mRunning = true;
 }
 
 void Thread::join()
 {
-    if (mThread == nullptr) {
-        return;
+    if (m_thread)
+    {
+        m_isStopped = true;
+
+        if (m_thread->joinable())
+        {
+            m_thread->join();
+        }
+
+        delete m_thread;
+        m_thread = nullptr;
+
+        m_isRunning = false;
     }
-
-    mShouldStop = true;
-
-    if (mThread->joinable()) {
-        mThread->join();
-    }
-
-    delete mThread;
-    mThread = nullptr;
-
-    mRunning = false;
 }
-

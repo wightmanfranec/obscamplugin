@@ -26,7 +26,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("obs-ios-camera-plugin", "en-US")
 
 extern void RegisterIOSCameraSource();
 
-bool obs_module_load(void)
+bool obs_module_load()
 {
     blog(LOG_INFO, "Loading iOS Camera Plugin (version %s)", IOS_CAMERA_PLUGIN_VERSION);
     RegisterIOSCameraSource();
